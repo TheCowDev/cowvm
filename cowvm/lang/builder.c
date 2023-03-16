@@ -20,7 +20,7 @@ CowBlock cow_builder_set_current_block(CowBuilder builder, CowBlock block) {
 
 static CowValue add_const_instr(_CowBuilder *builder, int opcode, CowType type, int64_t value) {
     CowValue result_value = cow_alloc(sizeof(_CowValue));
-    result_value->id = builder->current_block->instructions.size;
+    result_value->id = builder->values.size;
     result_value->type = type;
 
     CowInstr *instr = cow_alloc(sizeof(CowInstr));
@@ -66,7 +66,7 @@ CowValue cow_builder_const_ptr(CowBuilder builder, void *ptr) {
 
 static CowValue add_op_instr(_CowBuilder *builder, int opcode, CowValue left, CowValue right) {
     CowValue result_value = cow_alloc(sizeof(_CowValue));
-    result_value->id = builder->current_block->instructions.size;
+    result_value->id = builder->values.size;
 
     CowInstr *instr = cow_alloc(sizeof(CowInstr));
     instr->opcode = opcode;
@@ -129,7 +129,7 @@ CowValue cow_builder_larger_eq(_CowBuilder *builder, CowValue first, CowValue se
 
 CowValue cow_builder_not(CowBuilder builder, CowValue value) {
     CowValue result_value = cow_alloc(sizeof(_CowValue));
-    result_value->id = builder->current_block->instructions.size;
+    result_value->id = builder->values.size;
 
     CowInstr *instr = cow_alloc(sizeof(CowInstr));
     instr->opcode = COW_OPCODE_NOT;
@@ -163,7 +163,7 @@ void cow_builder_cond_br(_CowBuilder *builder, CowValue cond, CowBlock block_tru
 
 CowValue cow_builder_load(_CowBuilder *builder, CowValue value, CowType type) {
     CowValue result_value = cow_alloc(sizeof(_CowValue));
-    result_value->id = builder->current_block->instructions.size;
+    result_value->id = builder->values.size;
 
     CowInstr *instr = cow_alloc(sizeof(CowInstr));
     instr->opcode = COW_OPCODE_LOAD;
@@ -192,7 +192,7 @@ cow_builder_call_ptr(CowBuilder builder, CowType call_return, CowValue func_to_c
                      size_t args_count) {
     CowValue result_value = cow_alloc(sizeof(_CowValue));
     result_value->type = call_return;
-    result_value->id = builder->current_block->instructions.size;
+    result_value->id = builder->values.size;
 
     CowInstr *instr = cow_alloc(sizeof(CowInstr));
     instr->opcode = COW_OPCODE_CALL_PTR;
@@ -210,7 +210,7 @@ cow_builder_call_ptr(CowBuilder builder, CowType call_return, CowValue func_to_c
 CowValue cow_builder_call_func(CowBuilder builder, CowFunc func_to_call, CowValue *args, size_t args_count) {
     CowValue result_value = cow_alloc(sizeof(_CowValue));
     result_value->type = func_to_call->return_type;
-    result_value->id = builder->current_block->instructions.size;
+    result_value->id = builder->values.size;
 
     CowInstr *instr = cow_alloc(sizeof(CowInstr));
     instr->opcode = COW_OPCODE_CALL_FUNC;

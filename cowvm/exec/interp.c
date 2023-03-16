@@ -6,15 +6,27 @@
 
 CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
 
+    typedef struct {
+        CowBlock block;
+        CowInstr *instr;
+        int32_t instr_index;
+        size_t gen_value_id;
+        CowInterpValue *registers;
+    } CallFrame;
 
+    CallFrame frames[1200];
+    size_t current_frame = 0;
+
+    // Var to handle registers
+    CowInterpValue pool_of_registers[5000];
+    CowInterpValue *registers = (CowInterpValue *) &pool_of_registers;
+
+    // Var to handle instructions
     int32_t instr_index = 0;
-
     CowBlock current_block = (CowBlock) func->builder.blocks.data[0];
     CowInstr *current_instr = (CowInstr *) current_block->instructions.data[0];
 
-    CowInterpValue *registers = cow_alloc(sizeof(CowInterpValue) * func->builder.values.size);
-
-    for (int i = 0; i < func->args_count; ++i) {
+    for (size_t i = 0; i < func->args_count; ++i) {
         registers[i] = values[i];
     }
 
@@ -232,27 +244,58 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
                 break;
 
             case COW_OPCODE_CALL_FUNC: {
+                CowInstr *old_instr = current_instr;
+                CowInterpValue *old_registers = registers;
+
                 CowFunc func_to_call = current_instr->call_func.func_value;
 
-                CowInterpValue *inter_values = cow_alloc(sizeof(CowInterpValue) * func_to_call->args_count);
-                for (size_t i = 0; i < func->args_count; ++i) {
-                    inter_values[i].value_i64 = registers[current_instr->call_func.args[i]->id].value_i64;
+                CallFrame *new_frame = (CallFrame *) &frames[current_frame];
+                new_frame->instr = old_instr;
+                new_frame->registers = old_registers;
+                new_frame->gen_value_id = old_instr->gen_value->id;
+                ++current_frame;
+
+                instr_index = 0;
+                current_block = (CowBlock) func_to_call->builder.blocks.data[0];
+                registers += func_to_call->builder.values.size;
+
+                for (size_t i = 0; i < func_to_call->args_count; ++i) {
+                    registers[i] = old_registers[old_instr->call_func.args[i]->id];
                 }
-
-                registers[current_instr->gen_value->id] = eval_func(func_to_call, inter_values);
-
-                cow_free(inter_values);
             }
                 break;
 
             case COW_OPCODE_RET: {
-                CowInterpValue return_value;
-                return_value = registers[current_instr->return_value->id];
-                return return_value;
-            }
+                if (current_frame > 0) {
+                    --current_frame;
+                    CowInterpValue *value_returned = &registers[current_instr->gen_value->id];
 
-            case COW_OPCODE_RET_VOID:
-                return (CowInterpValue) {};
+                    CallFrame *calling_frame = &frames[current_frame];
+                    registers = (CowInterpValue *) calling_frame->registers;
+                    current_block = calling_frame->block;
+                    registers[calling_frame->gen_value_id] = *value_returned;
+                } else {
+                    CowInterpValue return_value;
+                    return_value = registers[current_instr->return_value->id];
+                    return return_value;
+                }
+            }
+                break;
+
+            case COW_OPCODE_RET_VOID: {
+                if (current_frame > 0) {
+                    --current_frame;
+                    CowInterpValue *value_returned = &registers[current_instr->gen_value->id];
+
+                    CallFrame *calling_frame = &frames[current_frame];
+                    registers = (CowInterpValue *) calling_frame->registers;
+                    current_block = calling_frame->block;
+                    registers[calling_frame->gen_value_id] = *value_returned;
+                } else {
+                    return (CowInterpValue) {};
+                }
+            }
+                break;
         }
 
         ++instr_index;

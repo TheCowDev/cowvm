@@ -1,5 +1,12 @@
 #include "cow.h"
 #include "exec/interp.h"
+#include <sys/time.h>
+
+long long time_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (((long long) tv.tv_sec) * 1000) + (tv.tv_usec / 1000);
+}
 
 int main() {
 
@@ -28,10 +35,15 @@ int main() {
     cow_builder_ret(builder, cow_builder_add(builder, first_call_result, second_call_result));
 
     CowInterpValue arg;
-    arg.value_i64 = 22;
-    int result = (int) cow_interpret("fib", module, &arg).value_i64;
+    arg.value_i64 = 32;
 
-    printf("%d", result);
+    long long begin = time_ms();
+    int result = (int) cow_interpret("fib", module, &arg).value_i64;
+    long long end = time_ms();
+
+
+    printf("%d\n", result);
+    printf("%d", (end - begin));
 
     return 0;
 }
