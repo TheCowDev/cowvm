@@ -29,6 +29,12 @@ typedef struct {
         } load;
 
         struct {
+            CowValue func_value;
+            CowValue *args;
+            size_t args_count;
+        } call;
+
+        struct {
             CowBlock block_to_br;
         } br;
 
@@ -38,7 +44,12 @@ typedef struct {
             CowBlock block_to_br_false;
         } cond_br;
 
+        CowValue return_value;
+        CowValue not_value;
+
     };
+
+    CowValue gen_value;
 
 } CowInstr;
 
