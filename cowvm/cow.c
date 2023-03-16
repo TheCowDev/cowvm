@@ -22,6 +22,8 @@ CowFunc cow_create_func(CowModule module, char *name, CowType *args, size_t args
     for (size_t i = 0; i < args_count; ++i) {
         array_add(&new_func->builder.values, NULL);
     }
+
+    return new_func;
 }
 
 CowFunc cow_find_function(CowModule module, char *name) {
