@@ -5,6 +5,7 @@
 #include "value.h"
 #include "opcode.h"
 #include "block.h"
+#include "function.h"
 
 typedef struct {
     int opcode;
@@ -29,10 +30,17 @@ typedef struct {
         } load;
 
         struct {
-            CowValue func_value;
+            CowValue func_ptr_value;
             CowValue *args;
             size_t args_count;
-        } call;
+            CowType call_return_type;
+        } call_ptr;
+
+        struct {
+            CowFunc func_value;
+            CowValue *args;
+            size_t args_count;
+        } call_func;
 
         struct {
             CowBlock block_to_br;

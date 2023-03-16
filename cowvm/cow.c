@@ -20,7 +20,10 @@ CowFunc cow_create_func(CowModule module, char *name, CowType *args, size_t args
     CowBlock first_block = cow_builder_create_block(&new_func->builder);
     new_func->builder.current_block = first_block;
     for (size_t i = 0; i < args_count; ++i) {
-        array_add(&new_func->builder.values, NULL);
+        CowValue arg_value = cow_alloc(sizeof(_CowValue));
+        arg_value->type = args[i];
+        arg_value->id = i;
+        array_add(&new_func->builder.values, arg_value);
     }
 
     return new_func;

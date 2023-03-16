@@ -14,6 +14,7 @@ typedef struct {
         bool value_i1;
         float value_f32;
         double value_f64;
+        void *value_ptr;
     };
 } CowInterpValue;
 
