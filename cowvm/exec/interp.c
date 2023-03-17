@@ -8,7 +8,6 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
 
     typedef struct {
         CowBlock block;
-        CowInstr *instr;
         int32_t instr_index;
         size_t gen_value_id;
         CowInterpValue *registers;
@@ -250,12 +249,13 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
                 CowFunc func_to_call = current_instr->call_func.func_value;
 
                 CallFrame *new_frame = (CallFrame *) &frames[current_frame];
-                new_frame->instr = old_instr;
+                new_frame->instr_index = instr_index;
                 new_frame->registers = old_registers;
                 new_frame->gen_value_id = old_instr->gen_value->id;
+                new_frame->block = current_block;
                 ++current_frame;
 
-                instr_index = 0;
+                instr_index = -1;
                 current_block = (CowBlock) func_to_call->builder.blocks.data[0];
                 registers += func_to_call->builder.values.size;
 
@@ -268,9 +268,10 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
             case COW_OPCODE_RET: {
                 if (current_frame > 0) {
                     --current_frame;
-                    CowInterpValue *value_returned = &registers[current_instr->gen_value->id];
+                    CowInterpValue *value_returned = &registers[current_instr->return_value->id];
 
                     CallFrame *calling_frame = &frames[current_frame];
+                    instr_index = calling_frame->instr_index;
                     registers = (CowInterpValue *) calling_frame->registers;
                     current_block = calling_frame->block;
                     registers[calling_frame->gen_value_id] = *value_returned;
@@ -288,6 +289,7 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
                     CowInterpValue *value_returned = &registers[current_instr->gen_value->id];
 
                     CallFrame *calling_frame = &frames[current_frame];
+                    instr_index = calling_frame->instr_index;
                     registers = (CowInterpValue *) calling_frame->registers;
                     current_block = calling_frame->block;
                     registers[calling_frame->gen_value_id] = *value_returned;
