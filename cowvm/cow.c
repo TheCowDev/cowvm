@@ -1,5 +1,6 @@
 #include "cow.h"
 #include "misc/data/memory.h"
+#include "gen/x86_64/gen.h"
 
 CowModule cow_module_create() {
     CowModule module = cow_calloc(sizeof(_CowModule));
@@ -7,9 +8,22 @@ CowModule cow_module_create() {
     return module;
 }
 
+void cow_module_jit(CowModule module) {
+    cow_x86_64_jit(module);
+
+    // Allocate executable memory
+    for (size_t i = 0; i < module->funcs.size; ++i) {
+        CowFunc func = module->funcs.data[i];
+        char *code = func->jit_func.code.data;
+        const size_t code_size = func->jit_func.code.current_index + 1;
+        char *exec = cow_alloc_exec_mem(code_size);
+        memcpy(exec, code, code_size);
+        func->jit_func.generated_func = exec;
+    }
+}
+
 CowFunc cow_create_func(CowModule module, char *name, CowType *args, size_t args_count, CowType return_type) {
-    CowFunc new_func = cow_alloc(sizeof(_CowFunc));
-    new_func->builder = (_CowBuilder) {0};
+    CowFunc new_func = cow_calloc(sizeof(_CowFunc));
     new_func->name = name;
     new_func->args = args;
     new_func->args_count = args_count;

@@ -8,7 +8,7 @@ long long time_ms(void) {
     return (((long long) tv.tv_sec) * 1000) + (tv.tv_usec / 1000);
 }
 
-int main() {
+int main_fib() {
 
     CowModule module = cow_module_create();
 
@@ -47,3 +47,32 @@ int main() {
 
     return 0;
 }
+
+typedef int (*JitFunc)();
+
+int main() {
+
+    CowModule module = cow_module_create();
+
+    CowType arg_type = cow_type_i64();
+
+    CowFunc my_func = cow_create_func(module, "my_func", &arg_type, 1, cow_type_f32());
+    CowBuilder builder = cow_func_get_builder(my_func);
+
+    CowValue value_left = cow_builder_const_i64(builder, 1);
+    CowValue value_right = cow_builder_const_i32(builder, 2);
+    CowValue value_result = cow_builder_add(builder, value_left, value_right);
+
+    cow_builder_ret(builder, value_result);
+
+    cow_module_jit(module);
+
+    JitFunc ptr_func = my_func->jit_func.generated_func;
+    int result = ptr_func();
+
+    printf("%d\n", result);
+
+
+    return 0;
+}
+

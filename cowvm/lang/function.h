@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include "builder.h"
 #include "type.h"
+#include "../misc/data/byte_writer.h"
+
+typedef struct {
+    ByteWriter code;
+    void *generated_func;
+} _CowJitFunc;
 
 
 typedef struct {
@@ -12,6 +18,7 @@ typedef struct {
     CowType return_type;
     size_t args_count;
     _CowBuilder builder;
+    _CowJitFunc jit_func;
 } _CowFunc;
 
 typedef _CowFunc *CowFunc;

@@ -15,4 +15,4 @@ add_executable(cowvm cowvm/main.c
         cowvm/lang/builder.c cowvm/lang/function.h
         cowvm/cow.c cowvm/lang/function.c
         cowvm/exec/interp.h
-        cowvm/exec/interp.c)
+        cowvm/exec/interp.c cowvm/misc/data/byte_writer.h cowvm/misc/data/byte_writer.c cowvm/gen/x86_64/gen.h cowvm/gen/x86_64/gen.c)
