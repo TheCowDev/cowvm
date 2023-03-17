@@ -1,7 +1,4 @@
 #include "interp.h"
-#include <stdbool.h>
-#include "../lang/function.h"
-#include "../misc/data/memory.h"
 #include "../lang/instruction.h"
 
 CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
@@ -29,9 +26,7 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
         registers[i] = values[i];
     }
 
-    bool run = true;
-
-    while (run) {
+    while (1) {
 
         switch (current_instr->opcode) {
 
@@ -44,21 +39,21 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
 
             case COW_OPCODE_CONST_I32: {
                 CowInterpValue value;
-                value.value_i32 = current_instr->const_value;
+                value.value_i32 = (int32_t) current_instr->const_value;
                 registers[current_instr->gen_value->id] = value;
             }
                 break;
 
             case COW_OPCODE_CONST_I16: {
                 CowInterpValue value;
-                value.value_i16 = current_instr->const_value;
+                value.value_i16 = (int16_t) current_instr->const_value;
                 registers[current_instr->gen_value->id] = value;
             }
                 break;
 
             case COW_OPCODE_CONST_I8: {
                 CowInterpValue value;
-                value.value_i8 = current_instr->const_value;
+                value.value_i8 = (int8_t) current_instr->const_value;
                 registers[current_instr->gen_value->id] = value;
             }
                 break;
@@ -187,7 +182,10 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
                         break;
 
                     case COW_DATA_TYPE_I8:
-                        registers[current_instr->gen_value->id].value_i8 = *((int32_t *) addr_to_load);
+                        registers[current_instr->gen_value->id].value_i8 = *((int8_t *) addr_to_load);
+                        break;
+
+                    default:
                         break;
                 }
 
@@ -216,6 +214,9 @@ CowInterpValue eval_func(CowFunc func, CowInterpValue *values) {
 
                     case COW_DATA_TYPE_I8:
                         *((int8_t *) addr_to_store) = registers[current_instr->store.to_store->id].value_i8;
+                        break;
+
+                    default:
                         break;
                 }
             }
@@ -311,4 +312,6 @@ CowInterpValue cow_interpret(char *name, CowModule module, CowInterpValue *value
     if (func_to_call != NULL) {
         return eval_func(func_to_call, values);
     }
+
+    return (CowInterpValue) {};
 }
