@@ -4,6 +4,24 @@
 #include "opcode.h"
 #include "function.h"
 
+void cow_builder_free(CowBuilder builder) {
+
+    for (int i = 0; i < builder->values.size; ++i) {
+        cow_free(builder->values.data[i]);
+    }
+
+    for (int i = 0; i < builder->blocks.size; ++i) {
+        CowBlock block = builder->blocks.data[i];
+        for (int j = 0; j < block->instructions.size; ++j) {
+            cow_free(block->instructions.data[j]);
+        }
+        cow_free(builder->blocks.data[i]);
+    }
+
+    array_free(&builder->values);
+    array_free(&builder->blocks);
+}
+
 CowBlock cow_builder_create_block(_CowBuilder *builder) {
     CowBlock new_block = cow_calloc(sizeof(_CowBlock));
     array_add(&builder->blocks, new_block);

@@ -8,6 +8,16 @@ CowModule cow_module_create() {
     return module;
 }
 
+void cow_module_free(CowModule module) {
+
+    for (size_t i = 0; i < module->funcs.size; ++i) {
+        CowFunc func = module->funcs.data[i];
+        cow_func_free(func);
+    }
+
+    array_free(&module->funcs);
+}
+
 void cow_module_jit(CowModule module) {
     cow_x86_64_jit(module);
 
@@ -25,7 +35,9 @@ void cow_module_jit(CowModule module) {
 CowFunc cow_create_func(CowModule module, char *name, CowType *args, size_t args_count, CowType return_type) {
     CowFunc new_func = cow_calloc(sizeof(_CowFunc));
     new_func->name = name;
-    new_func->args = args;
+    CowType *func_args = cow_alloc(sizeof(CowType) * args_count);
+    memcpy(func_args, args, sizeof(CowType) * args_count);
+    new_func->args = func_args;
     new_func->args_count = args_count;
     new_func->return_type = return_type;
     array_add(&module->funcs, new_func);

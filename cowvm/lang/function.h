@@ -23,6 +23,8 @@ typedef struct {
 
 typedef _CowFunc *CowFunc;
 
+void cow_func_free(CowFunc func);
+
 CowBuilder cow_func_get_builder(CowFunc func);
 
 CowValue cow_builder_call_func(CowBuilder builder, CowFunc func_to_call, CowValue *args, size_t args_count);

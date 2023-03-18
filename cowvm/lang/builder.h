@@ -15,6 +15,8 @@ typedef struct {
 
 typedef _CowBuilder *CowBuilder;
 
+void cow_builder_free(CowBuilder builder);
+
 CowBlock cow_builder_create_block(_CowBuilder *builder);
 
 CowValue cow_builder_get_arg(CowBuilder builder, size_t index);

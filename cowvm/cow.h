@@ -13,6 +13,8 @@ typedef _CowModule *CowModule;
 
 CowModule cow_module_create();
 
+void cow_module_free(CowModule module);
+
 void cow_module_jit(CowModule module);
 
 CowFunc cow_create_func(CowModule module, char *name, CowType *args, size_t args_count, CowType return_type);
