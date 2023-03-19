@@ -1,6 +1,8 @@
 #ifndef COWVM_TYPE_H
 #define COWVM_TYPE_H
 
+#include <stdbool.h>
+
 typedef enum {
     COW_DATA_TYPE_VOID = 0,
     COW_DATA_TYPE_I64 = 1,
@@ -52,6 +54,10 @@ static CowType cow_type_f64() {
 
 static CowType cow_type_ptr() {
     return cow_type_from_data_type(COW_DATA_TYPE_PTR);
+}
+
+static bool cow_type_is_decimal(CowType type) {
+    return type.data_type == COW_DATA_TYPE_F32 || type.data_type == COW_DATA_TYPE_F64;
 }
 
 #endif //COWVM_TYPE_H

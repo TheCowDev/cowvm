@@ -1,5 +1,18 @@
 #include "gen.h"
+#include <stdint.h>
+#include <stdbool.h>
 #include "../../lang/instruction.h"
+
+typedef struct {
+    uint8_t reg_value;
+    CowValue value;
+} X86Register;
+
+#define X86_REGISTERS_COUNT 14
+
+typedef struct {
+    X86Register registers[X86_REGISTERS_COUNT];
+} X86RegisterAllocator;
 
 #define REGISTER_RAX 0 //return value
 #define REGISTER_RCX 1
@@ -35,10 +48,78 @@
 #define REGISTER_XMM14 14
 #define REGISTER_XMM15 15
 
+void allocate_init(X86RegisterAllocator *allocator) {
+    allocator->registers[0] = (X86Register) {REGISTER_RCX, NULL};
+    allocator->registers[1] = (X86Register) {REGISTER_RDX, NULL};
+    allocator->registers[2] = (X86Register) {REGISTER_RBX, NULL};
+    allocator->registers[3] = (X86Register) {REGISTER_RSI, NULL};
+    allocator->registers[4] = (X86Register) {REGISTER_RDI, NULL};
+    allocator->registers[5] = (X86Register) {REGISTER_R8, NULL};
+    allocator->registers[6] = (X86Register) {REGISTER_R9, NULL};
+    allocator->registers[7] = (X86Register) {REGISTER_R10, NULL};
+    allocator->registers[8] = (X86Register) {REGISTER_R11, NULL};
+    allocator->registers[9] = (X86Register) {REGISTER_R12, NULL};
+    allocator->registers[10] = (X86Register) {REGISTER_R13, NULL};
+    allocator->registers[11] = (X86Register) {REGISTER_R14, NULL};
+    allocator->registers[12] = (X86Register) {REGISTER_R15, NULL};
+}
+
+uint8_t allocate_register(X86RegisterAllocator *allocator, CowValue value) {
+    for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
+        if (allocator->registers[i].value == NULL) {
+            allocator->registers[i].value = value;
+            return allocator->registers[i].reg_value;
+        }
+    }
+
+    return 0;
+}
+
+bool allocator_switch(X86RegisterAllocator *allocator, CowValue old_value, CowValue new_value) {
+    for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
+        if (allocator->registers[i].value == old_value) {
+            allocator->registers[i].value = new_value;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool free_register(X86RegisterAllocator *allocator, CowValue value) {
+    for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
+        if (allocator->registers[i].value == value) {
+            allocator->registers[i].value = NULL;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint8_t get_register_for_value(X86RegisterAllocator *allocator, CowValue value) {
+    for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
+        if (allocator->registers[i].value == value) {
+            return allocator->registers[i].reg_value;
+        }
+    }
+
+    return 0;
+}
+
 static void write_mov_reg_int64(ByteWriter *writer, uint8_t dest_reg, int64_t value) {
     byte_writer_uint8(writer, 0x48); // REX prefix
     byte_writer_uint8(writer, 0xB8 | (dest_reg & 0x7)); // src_register
     byte_writer_int64(writer, value); // const
+}
+
+static void write_mov_reg_to_reg(ByteWriter *writer, uint8_t src_reg, uint8_t dest_reg) {
+    byte_writer_uint8(writer, 0x89); // opcode for mov instruction
+    unsigned char modrm = 0;
+    modrm |= (3 << 6); // register-to-register encoding
+    modrm |= (src_reg << 3); // 3 bits for destination register
+    modrm |= dest_reg; // 3 bits for source register
+    byte_writer_uint8(writer, modrm); // ModR/M byte specifying registers
 }
 
 
@@ -48,8 +129,14 @@ static void write_mov_reg_to_xmm(ByteWriter *writer, uint8_t src_reg, uint8_t de
     byte_writer_uint8(writer, 0X0F); // opcode for extension
     byte_writer_uint8(writer, 0x6E); // opcode for movq
     byte_writer_uint8(writer, (0xC0 | (dest_reg & 0x7) << 3 | (src_reg & 0x7)));
+}
 
-
+static void write_move_xmm_to_reg(ByteWriter *writer, uint8_t xmm, uint8_t reg) {
+    byte_writer_uint8(writer, 0x66); // prefix for xmm register
+    byte_writer_uint8(writer, 0x48); // REX prefix
+    byte_writer_uint8(writer, 0x0F); // opcode extension
+    byte_writer_uint8(writer, 0x7E);  // opcode for "movq" instruction
+    byte_writer_uint8(writer, (0xC0 | (xmm & 0x7) << 3 | (reg & 0x7)));
 }
 
 static void write_add_reg_to_reg(ByteWriter *writer, uint8_t left_reg, uint8_t right_reg) {
@@ -61,33 +148,74 @@ static void write_add_reg_to_reg(ByteWriter *writer, uint8_t left_reg, uint8_t r
     byte_writer_uint8(writer, modrm); // ModR/M byte specifying registers
 }
 
+static void write_add_reg_to_reg_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t xmm2) {
+    const uint8_t mod = 3;
+    xmm1 &= 0x0F;
+    xmm2 &= 0x0F;
+    uint8_t modrm = (mod << 6) | (xmm1 << 3) | xmm2;
+
+    if (xmm1 >= 8 || xmm2 >= 8) { //if beyond XMM8, we need the REX prefix
+        uint8_t rex = 0x40 | ((xmm1 & 0x08) >> 1) | (xmm2 & 0x08);
+        byte_writer_uint8(writer, rex);
+    }
+
+    byte_writer_uint8(writer, 0x0F);
+    byte_writer_uint8(writer, 0x58);
+    byte_writer_uint8(writer, modrm);
+}
+
 static void write_ret(ByteWriter *writer) {
     byte_writer_uint8(writer, 0xC3);
 }
 
 
-void jit_instr(CowFunc func, CowInstr *instr) {
+void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
     ByteWriter *writer = &func->jit_func.code;
 
     switch (instr->opcode) {
 
-        case COW_OPCODE_CONST_I32:
-            write_mov_reg_int64(writer, REGISTER_RBX, instr->const_value);
+        case COW_OPCODE_CONST_I32: {
+            uint8_t const_reg = allocate_register(allocator, instr->gen_value);
+            write_mov_reg_int64(writer, const_reg, instr->const_value);
+        }
             break;
 
-        case COW_OPCODE_CONST_I64:
-            write_mov_reg_int64(writer, REGISTER_RAX, instr->const_value);
+        case COW_OPCODE_CONST_I64: {
+            uint8_t const_reg = allocate_register(allocator, instr->gen_value);
+            write_mov_reg_int64(writer, const_reg, instr->const_value);
+        }
             break;
 
-        case COW_OPCODE_ADD:
-            write_add_reg_to_reg(writer, REGISTER_RAX, REGISTER_RBX);
+        case COW_OPCODE_ADD: {
+            if (cow_type_is_decimal(instr->op.left_value->type)) {
+                uint8_t add_result_reg = get_register_for_value(allocator, instr->op.left_value);
+                uint8_t right_reg = get_register_for_value(allocator, instr->op.right_value);
+
+                write_mov_reg_to_xmm(writer, add_result_reg, REGISTER_XMM0);
+                write_mov_reg_to_xmm(writer, right_reg, REGISTER_XMM1);
+
+                write_add_reg_to_reg_xmm(writer, REGISTER_XMM0, REGISTER_XMM1);
+                write_move_xmm_to_reg(writer, REGISTER_XMM0, add_result_reg);
+
+                allocator_switch(allocator, instr->op.left_value, instr->gen_value);
+
+            } else {
+                uint8_t add_result_reg = get_register_for_value(allocator, instr->op.left_value);
+                uint8_t right_reg = get_register_for_value(allocator, instr->op.right_value);
+                allocator_switch(allocator, instr->op.left_value, instr->gen_value);
+
+                write_add_reg_to_reg(writer, add_result_reg, right_reg);
+            }
+        }
             break;
 
         case COW_OPCODE_RET:
             if (func->return_type.data_type == COW_DATA_TYPE_F64 || func->return_type.data_type == COW_DATA_TYPE_F32) {
-                write_mov_reg_to_xmm(writer, REGISTER_RAX, REGISTER_XMM0);
+                uint8_t return_register = get_register_for_value(allocator, instr->return_value);
+                write_mov_reg_to_xmm(writer, return_register, REGISTER_XMM0);
                 write_ret(writer);
             } else {
+                write_mov_reg_to_reg(writer, get_register_for_value(allocator, instr->return_value), REGISTER_RAX);
                 write_ret(writer);
             }
             break;
@@ -100,13 +228,15 @@ void jit_instr(CowFunc func, CowInstr *instr) {
 }
 
 void jit_func(CowFunc func) {
+    X86RegisterAllocator allocator;
+    allocate_init(&allocator);
 
     for (int i = 0; i < func->builder.blocks.size; ++i) {
         CowBlock current_block = (CowBlock) func->builder.blocks.data[i];
 
         for (int j = 0; j < current_block->instructions.size; ++j) {
             CowInstr *instr = (CowInstr *) current_block->instructions.data[j];
-            jit_instr(func, instr);
+            jit_instr(func, instr, &allocator);
         }
 
     }
