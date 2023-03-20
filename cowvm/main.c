@@ -48,7 +48,7 @@ int main_fib() {
     return 0;
 }
 
-typedef int (*JitFunc)();
+typedef float (*JitFunc)();
 
 int main() {
 
@@ -59,19 +59,21 @@ int main() {
     CowFunc my_func = cow_create_func(module, "my_func", &arg_type, 1, cow_type_f32());
     CowBuilder builder = cow_func_get_builder(my_func);
 
-    CowValue value_left = cow_builder_const_i64(builder, 1);
-    CowValue value_right = cow_builder_const_i32(builder, 2);
+    CowValue value_left = cow_builder_const_f32(builder, 40);
+    CowValue value_right = cow_builder_const_f32(builder, 20);
+    CowValue value_ex = cow_builder_const_f32(builder, 100);
     CowValue value_result = cow_builder_add(builder, value_left, value_right);
-
+    value_result = cow_builder_add(builder, value_result, value_ex);
     cow_builder_ret(builder, value_result);
 
     cow_module_jit(module);
 
     JitFunc ptr_func = my_func->jit_func.generated_func;
-    int result = ptr_func();
+    float result = ptr_func();
 
-    printf("%d\n", result);
+    cow_module_free(module);
 
+    printf("%.6f\n", result);
 
     return 0;
 }
