@@ -6,6 +6,7 @@
 
 typedef struct {
     Array instructions;
+    size_t code_offset; //represent his relative bytes in machine instructions
 } _CowBlock;
 
 typedef _CowBlock *CowBlock;

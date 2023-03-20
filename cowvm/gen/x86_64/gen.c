@@ -4,6 +4,12 @@
 #include "../../lang/instruction.h"
 
 typedef struct {
+    CowBlock block;
+    size_t offset;
+    int instr_size;
+} BlockToReplace;
+
+typedef struct {
     uint8_t reg_value;
     CowValue value;
 } X86Register;
@@ -12,6 +18,8 @@ typedef struct {
 
 typedef struct {
     X86Register registers[X86_REGISTERS_COUNT];
+    int stack_allocation;
+    Array block_offsets_to_set;
 } X86RegisterAllocator;
 
 #define REGISTER_RAX 0 //return value
@@ -71,6 +79,8 @@ uint8_t allocate_register(X86RegisterAllocator *allocator, CowValue value) {
             return allocator->registers[i].reg_value;
         }
     }
+
+    printf("No empty register left");
 
     return 0;
 }
@@ -148,6 +158,34 @@ static void write_add_reg_to_reg(ByteWriter *writer, uint8_t left_reg, uint8_t r
     byte_writer_uint8(writer, modrm); // ModR/M byte specifying registers
 }
 
+static void write_sub_reg_to_reg(ByteWriter *writer, uint8_t left_reg, uint8_t right_reg) {
+    byte_writer_uint8(writer, 0x29); // opcode for SUB
+    unsigned char modrm = 0;
+    modrm |= (3 << 6); // set operation to 11 (register-to-register)
+    modrm |= (right_reg << 3); // set destination register
+    modrm |= left_reg; // set source register
+    byte_writer_uint8(writer, modrm); // ModR/M byte specifying registers
+}
+
+static void write_div_reg(ByteWriter *writer, uint8_t reg) {
+    byte_writer_uint8(writer, 0xF7); // opcode for DIV
+    unsigned char modrm = 0;
+    modrm |= (3 << 6); // set operation to 11 (register-to-register)
+    modrm |= (6 << 3); // set destination register (/w extension)
+    modrm |= reg; // set source register
+    byte_writer_uint8(writer, modrm); // ModR/M byte specifying registers
+}
+
+static void write_mod_reg_to_reg(ByteWriter *writer, uint8_t left_reg, uint8_t right_reg) {
+    byte_writer_uint8(writer, 0xF7); // opcode for IDIV
+    unsigned char modrm = 0;
+    modrm |= (3 << 6); // set operation to 11 (register-to-register)
+    modrm |= (7 << 3); // set destination register (/w extension)
+    modrm |= right_reg; // set source register
+    byte_writer_uint8(writer, modrm); // ModR/M byte specifying registers
+}
+
+
 static void write_add_reg_to_reg_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t xmm2) {
     const uint8_t mod = 3;
     xmm1 &= 0x0F;
@@ -162,6 +200,79 @@ static void write_add_reg_to_reg_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t x
     byte_writer_uint8(writer, 0x0F);
     byte_writer_uint8(writer, 0x58);
     byte_writer_uint8(writer, modrm);
+}
+
+static void write_sub_reg_to_reg_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t xmm2) {
+    const uint8_t mod = 3;
+    xmm1 &= 0x0F;
+    xmm2 &= 0x0F;
+    uint8_t modrm = (mod << 6) | (xmm1 << 3) | xmm2;
+
+    if (xmm1 >= 8 || xmm2 >= 8) { // if beyond XMM8, we need the REX prefix
+        uint8_t rex = 0x40 | ((xmm1 & 0x08) >> 1) | (xmm2 & 0x08);
+        byte_writer_uint8(writer, rex);
+    }
+
+    byte_writer_uint8(writer, 0x0F);
+    byte_writer_uint8(writer, 0x5C);
+    byte_writer_uint8(writer, modrm);
+}
+
+static void write_mul_reg_to_reg_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t xmm2) {
+    const uint8_t mod = 3;
+    xmm1 &= 0x0F;
+    xmm2 &= 0x0F;
+    uint8_t modrm = (mod << 6) | (xmm1 << 3) | xmm2;
+
+    if (xmm1 >= 8 || xmm2 >= 8) { // if beyond XMM8, we need the REX prefix
+        uint8_t rex = 0x40 | ((xmm1 & 0x08) >> 1) | (xmm2 & 0x08);
+        byte_writer_uint8(writer, rex);
+    }
+
+    byte_writer_uint8(writer, 0x0F);
+    byte_writer_uint8(writer, 0x59);
+    byte_writer_uint8(writer, modrm);
+}
+
+static void write_div_reg_to_reg_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t xmm2) {
+    const uint8_t mod = 3;
+    xmm1 &= 0x0F;
+    xmm2 &= 0x0F;
+    uint8_t modrm = (mod << 6) | (xmm1 << 3) | xmm2;
+
+    if (xmm1 >= 8 || xmm2 >= 8) { // if beyond XMM8, we need the REX prefix
+        uint8_t rex = 0x40 | ((xmm1 & 0x08) >> 1) | (xmm2 & 0x08);
+        byte_writer_uint8(writer, rex);
+    }
+
+    byte_writer_uint8(writer, 0x0F);
+    byte_writer_uint8(writer, 0x5E);
+    byte_writer_uint8(writer, modrm);
+}
+
+static size_t write_jmp(ByteWriter *writer) {
+
+    // write the jmp instruction
+    byte_writer_uint8(writer, 0xE9);
+
+    // Write the 32-bit offset
+    size_t result = byte_writer_int32(writer, 0);
+
+    return result;
+}
+
+static size_t write_cond_jmp(ByteWriter *writer, uint8_t reg) {
+    //cmp reg,0
+    byte_writer_uint8(writer, 0x48);
+    byte_writer_uint8(writer, 0x83);
+    byte_writer_uint8(writer, 0xF8 | (reg & 7));
+    byte_writer_uint8(writer, 0x00);
+
+    //jz, jump if zero
+    byte_writer_uint8(writer, 0x0F);
+    byte_writer_uint8(writer, 0x084);
+    size_t result = byte_writer_int32(writer, 0);
+    return result;
 }
 
 static void write_ret(ByteWriter *writer) {
@@ -220,6 +331,33 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
             }
             break;
 
+        case COW_OPCODE_BR: {
+            size_t offset_index = write_jmp(writer);
+            BlockToReplace *replace = (BlockToReplace *) cow_alloc(sizeof(BlockToReplace));
+            replace->offset = offset_index;
+            replace->block = instr->br.block_to_br;
+            replace->instr_size = 4;
+            array_add(&allocator->block_offsets_to_set, replace);
+        }
+            break;
+
+        case COW_OPCODE_COND_BR: {
+            size_t offset_index = write_cond_jmp(writer, get_register_for_value(allocator, instr->cond_br.cond_value));
+            BlockToReplace *replace = (BlockToReplace *) cow_alloc(sizeof(BlockToReplace));
+            replace->offset = offset_index;
+            replace->block = instr->cond_br.block_to_br_false;
+            replace->instr_size = 4;
+            array_add(&allocator->block_offsets_to_set, replace);
+
+            offset_index = write_jmp(writer);
+            replace = (BlockToReplace *) cow_alloc(sizeof(BlockToReplace));
+            replace->offset = offset_index;
+            replace->block = instr->cond_br.block_to_br_true;
+            replace->instr_size = 4;
+            array_add(&allocator->block_offsets_to_set, replace);
+        }
+            break;
+
         case COW_OPCODE_RET_VOID:
             write_ret(&func->jit_func.code);
             break;
@@ -228,11 +366,12 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
 }
 
 void jit_func(CowFunc func) {
-    X86RegisterAllocator allocator;
+    X86RegisterAllocator allocator = (X86RegisterAllocator) {0};
     allocate_init(&allocator);
 
     for (int i = 0; i < func->builder.blocks.size; ++i) {
         CowBlock current_block = (CowBlock) func->builder.blocks.data[i];
+        current_block->code_offset = func->jit_func.code.current_index;
 
         for (int j = 0; j < current_block->instructions.size; ++j) {
             CowInstr *instr = (CowInstr *) current_block->instructions.data[j];
@@ -240,6 +379,16 @@ void jit_func(CowFunc func) {
         }
 
     }
+
+    // replace the block offsets
+    for (int i = 0; i < allocator.block_offsets_to_set.size; ++i) {
+        BlockToReplace *replace = (BlockToReplace *) allocator.block_offsets_to_set.data[i];
+        byte_writer_int32_at(&func->jit_func.code, replace->block->code_offset - replace->offset - replace->instr_size,
+                             replace->offset);
+        cow_free(replace);
+    }
+
+    array_free(&allocator.block_offsets_to_set);
 
 }
 
