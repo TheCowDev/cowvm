@@ -74,11 +74,11 @@ CowValue cow_builder_const_f64(_CowBuilder *builder, double value) {
 }
 
 CowValue cow_builder_const_f32(_CowBuilder *builder, float value) {
-    return add_const_instr(builder, COW_OPCODE_CONST_I32, cow_type_f64(), (int64_t) *((int32_t *) &value));
+    return add_const_instr(builder, COW_OPCODE_CONST_I32, cow_type_f32(), (int64_t) *((int32_t *) &value));
 }
 
 CowValue cow_builder_const_ptr(CowBuilder builder, void *ptr) {
-    return add_const_instr(builder, COW_OPCODE_CONST_PTR, cow_type_f64(), (int64_t) ptr);
+    return add_const_instr(builder, COW_OPCODE_CONST_PTR, cow_type_ptr(), (int64_t) ptr);
 }
 
 

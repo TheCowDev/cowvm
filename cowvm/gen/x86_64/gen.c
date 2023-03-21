@@ -123,6 +123,20 @@ static void write_mov_reg_int64(ByteWriter *writer, uint8_t dest_reg, int64_t va
     byte_writer_int64(writer, value); // const
 }
 
+//store
+static void write_mov_reg_to_mem(ByteWriter *writer, uint8_t src_reg, uint8_t dst_reg) {
+    byte_writer_uint8(writer, 0x48);
+    byte_writer_uint8(writer, 0x89);
+    byte_writer_uint8(writer, 0x00 | ((src_reg & 0x07) << 3) | (dst_reg & 0x07));
+}
+
+//load
+static void write_mov_mem_to_reg(ByteWriter *writer, uint8_t src_reg, uint8_t dst_reg) {
+    byte_writer_uint8(writer, 0x48);
+    byte_writer_uint8(writer, 0x8B);
+    byte_writer_uint8(writer, 0x00 | ((dst_reg & 0x07) << 3) | (src_reg & 0x07));
+}
+
 static void write_mov_reg_to_reg(ByteWriter *writer, uint8_t src_reg, uint8_t dest_reg) {
     byte_writer_uint8(writer, 0x89); // opcode for mov instruction
     unsigned char modrm = 0;
@@ -297,6 +311,12 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
         }
             break;
 
+        case COW_OPCODE_CONST_PTR: {
+            uint8_t const_reg = allocate_register(allocator, instr->gen_value);
+            write_mov_reg_int64(writer, const_reg, instr->const_value);
+        }
+            break;
+
         case COW_OPCODE_ADD: {
             if (cow_type_is_decimal(instr->op.left_value->type)) {
                 uint8_t add_result_reg = get_register_for_value(allocator, instr->op.left_value);
@@ -317,6 +337,18 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
 
                 write_add_reg_to_reg(writer, add_result_reg, right_reg);
             }
+        }
+            break;
+
+        case COW_OPCODE_LOAD: {
+            uint8_t load_reg = allocate_register(allocator, instr->gen_value);
+            write_mov_mem_to_reg(writer, get_register_for_value(allocator, instr->load.addr), load_reg);
+        }
+            break;
+
+        case COW_OPCODE_STORE: {
+            write_mov_reg_to_mem(writer, get_register_for_value(allocator, instr->store.to_store),
+                                 get_register_for_value(allocator, instr->store.addr));
         }
             break;
 
