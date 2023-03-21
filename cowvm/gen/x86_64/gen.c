@@ -22,14 +22,14 @@ typedef struct {
     Array block_offsets_to_set;
 } X86RegisterAllocator;
 
-#define REGISTER_RAX 0 //return value
+#define REGISTER_RAX 0
 #define REGISTER_RCX 1
 #define REGISTER_RDX 2
 #define REGISTER_RBX 3
 #define REGISTER_RSP 4 //stack pointer
 #define REGISTER_RBP 5 //base pointer
-#define REGISTER_RSI 6
-#define REGISTER_RDI 7
+#define REGISTER_RDI 6
+#define REGISTER_RSI 7
 #define REGISTER_R8 8
 #define REGISTER_R9 9
 #define REGISTER_R10 10
@@ -83,6 +83,17 @@ uint8_t allocate_register(X86RegisterAllocator *allocator, CowValue value) {
     printf("No empty register left");
 
     return 0;
+}
+
+bool assign_register_for_value(X86RegisterAllocator *allocator, uint8_t reg, CowValue value) {
+    for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
+        if (allocator->registers[i].reg_value == reg) {
+            allocator->registers[i].value = value;
+            return true;
+        }
+    }
+
+    return false;
 }
 
 bool allocator_switch(X86RegisterAllocator *allocator, CowValue old_value, CowValue new_value) {
@@ -289,6 +300,12 @@ static size_t write_cond_jmp(ByteWriter *writer, uint8_t reg) {
     return result;
 }
 
+static void write_call(ByteWriter *writer, uint8_t reg) {
+    byte_writer_uint8(writer, 0x48); // REX prefix for 64-bit mode
+    byte_writer_uint8(writer, 0xFF); // Opcode for the CALL instruction (indirect)
+    byte_writer_uint8(writer, 0xD0 | (reg & 0x07)); // ModR/M byte with register as operand
+}
+
 static void write_ret(ByteWriter *writer) {
     byte_writer_uint8(writer, 0xC3);
 }
@@ -352,6 +369,21 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
         }
             break;
 
+        case COW_OPCODE_CALL_PTR: {
+            write_call(writer, get_register_for_value(allocator, instr->call_ptr.func_ptr_value));
+            if (instr->call_ptr.call_return_type.data_type != COW_DATA_TYPE_VOID) {
+                uint8_t call_result_reg = allocate_register(allocator, instr->gen_value);
+                //move the result into the right register
+                write_mov_reg_to_reg(writer, REGISTER_RAX, call_result_reg);
+            }
+        }
+            break;
+
+        case COW_OPCODE_CALL_FUNC: {
+
+        }
+            break;
+
         case COW_OPCODE_RET:
             if (func->return_type.data_type == COW_DATA_TYPE_F64 || func->return_type.data_type == COW_DATA_TYPE_F32) {
                 uint8_t return_register = get_register_for_value(allocator, instr->return_value);
@@ -397,9 +429,78 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
 
 }
 
+static void assign_arg_to_register(CowFunc func, X86RegisterAllocator *allocator) {
+    //assign the arguments into specific register
+    //following the x86_64 calling convention
+
+    int integer_arg = 0;
+    int float_arg = 0;
+    int stack_args = 0;
+    for (int i = 0; i < func->args_count; ++i) {
+        CowValue arg = cow_builder_get_arg(&func->builder, i);
+        int arg_reg = 0;
+        if (cow_type_is_decimal(arg->type)) {
+            switch (float_arg) {
+                case 0:
+                    arg_reg = REGISTER_XMM0;
+                    break;
+
+                case 1:
+                    arg_reg = REGISTER_XMM1;
+                    break;
+
+                case 2:
+                    arg_reg = REGISTER_XMM2;
+                    break;
+
+                case 3:
+                    arg_reg = REGISTER_XMM3;
+                    break;
+
+                default:
+                    /* argument is passed on the stack in reversed order */
+                    ++stack_args;
+                    break;
+            }
+
+            ++float_arg;
+        } else {
+            switch (integer_arg) {
+
+                case 0:
+                    arg_reg = REGISTER_RCX;
+                    break;
+
+                case 1:
+                    arg_reg = REGISTER_RDX;
+                    break;
+
+                case 2:
+                    arg_reg = REGISTER_R8;
+                    break;
+
+                case 3:
+                    arg_reg = REGISTER_R9;
+                    break;
+
+                default:
+                    /* argument is passed on the stack in reversed order */
+                    ++stack_args;
+                    break;
+            }
+
+            ++integer_arg;
+        }
+
+        assign_register_for_value(allocator, arg_reg, arg);
+    }
+}
+
 void jit_func(CowFunc func) {
     X86RegisterAllocator allocator = (X86RegisterAllocator) {0};
     allocate_init(&allocator);
+
+    assign_arg_to_register(func, &allocator);
 
     for (int i = 0; i < func->builder.blocks.size; ++i) {
         CowBlock current_block = (CowBlock) func->builder.blocks.data[i];

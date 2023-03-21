@@ -42,7 +42,6 @@ CowFunc cow_create_func(CowModule module, char *name, CowType *args, size_t args
     new_func->return_type = return_type;
     array_add(&module->funcs, new_func);
 
-
     CowBlock first_block = cow_builder_create_block(&new_func->builder);
     new_func->builder.current_block = first_block;
     for (size_t i = 0; i < args_count; ++i) {
