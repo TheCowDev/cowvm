@@ -15,9 +15,11 @@ typedef struct {
 } X86Register;
 
 #define X86_REGISTERS_COUNT 14
+#define X86_XMM_COUNT 15
 
 typedef struct {
     X86Register registers[X86_REGISTERS_COUNT];
+    X86Register registers_xmm[X86_XMM_COUNT];
     int stack_allocation;
     Array block_offsets_to_set;
 } X86RegisterAllocator;
@@ -85,10 +87,34 @@ uint8_t allocate_register(X86RegisterAllocator *allocator, CowValue value) {
     return 0;
 }
 
+uint8_t allocate_xmm(X86RegisterAllocator *allocator, CowValue value) {
+    for (size_t i = 0; i < X86_XMM_COUNT; ++i) {
+        if (allocator->registers_xmm[i].value == NULL) {
+            allocator->registers_xmm[i].value = value;
+            return allocator->registers_xmm[i].reg_value;
+        }
+    }
+
+    printf("No empty xmm register left");
+
+    return 0;
+}
+
 bool assign_register_for_value(X86RegisterAllocator *allocator, uint8_t reg, CowValue value) {
     for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
         if (allocator->registers[i].reg_value == reg) {
             allocator->registers[i].value = value;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool assign_register_for_value_xmm(X86RegisterAllocator *allocator, uint8_t reg, CowValue value) {
+    for (size_t i = 0; i < X86_XMM_COUNT; ++i) {
+        if (allocator->registers_xmm[i].reg_value == reg) {
+            allocator->registers_xmm[i].value = value;
             return true;
         }
     }
@@ -106,10 +132,31 @@ bool is_register_assigned(X86RegisterAllocator *allocator, uint8_t reg) {
     return false;
 }
 
+bool is_register_assigned_xmm(X86RegisterAllocator *allocator, uint8_t reg) {
+    for (size_t i = 0; i < X86_XMM_COUNT; ++i) {
+        if (allocator->registers_xmm[i].reg_value == reg && allocator->registers_xmm[i].value != NULL) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool allocator_switch(X86RegisterAllocator *allocator, CowValue old_value, CowValue new_value) {
     for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
         if (allocator->registers[i].value == old_value) {
             allocator->registers[i].value = new_value;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool allocator_switch_xmm(X86RegisterAllocator *allocator, CowValue old_value, CowValue new_value) {
+    for (size_t i = 0; i < X86_XMM_COUNT; ++i) {
+        if (allocator->registers_xmm[i].value == old_value) {
+            allocator->registers_xmm[i].value = new_value;
             return true;
         }
     }
