@@ -72,6 +72,22 @@ void allocate_init(X86RegisterAllocator *allocator) {
     allocator->registers[10] = (X86Register) {REGISTER_R13, NULL};
     allocator->registers[11] = (X86Register) {REGISTER_R14, NULL};
     allocator->registers[12] = (X86Register) {REGISTER_R15, NULL};
+
+    allocator->registers_xmm[0] = (X86Register) {REGISTER_XMM1, NULL};
+    allocator->registers_xmm[1] = (X86Register) {REGISTER_XMM2, NULL};
+    allocator->registers_xmm[2] = (X86Register) {REGISTER_XMM3, NULL};
+    allocator->registers_xmm[3] = (X86Register) {REGISTER_XMM4, NULL};
+    allocator->registers_xmm[4] = (X86Register) {REGISTER_XMM5, NULL};
+    allocator->registers_xmm[5] = (X86Register) {REGISTER_XMM6, NULL};
+    allocator->registers_xmm[6] = (X86Register) {REGISTER_XMM7, NULL};
+    allocator->registers_xmm[7] = (X86Register) {REGISTER_XMM8, NULL};
+    allocator->registers_xmm[8] = (X86Register) {REGISTER_XMM9, NULL};
+    allocator->registers_xmm[9] = (X86Register) {REGISTER_XMM10, NULL};
+    allocator->registers_xmm[10] = (X86Register) {REGISTER_XMM11, NULL};
+    allocator->registers_xmm[11] = (X86Register) {REGISTER_XMM12, NULL};
+    allocator->registers_xmm[12] = (X86Register) {REGISTER_XMM13, NULL};
+    allocator->registers_xmm[13] = (X86Register) {REGISTER_XMM14, NULL};
+    allocator->registers_xmm[14] = (X86Register) {REGISTER_XMM15, NULL};
 }
 
 uint8_t allocate_register(X86RegisterAllocator *allocator, CowValue value) {
@@ -185,6 +201,16 @@ uint8_t get_register_for_value(X86RegisterAllocator *allocator, CowValue value) 
     return 0;
 }
 
+uint8_t get_xmm_for_value(X86RegisterAllocator *allocator, CowValue value) {
+    for (size_t i = 0; i < X86_XMM_COUNT; ++i) {
+        if (allocator->registers_xmm[i].value == value) {
+            return allocator->registers_xmm[i].reg_value;
+        }
+    }
+
+    return 0;
+}
+
 static void write_push_xmm(ByteWriter *writer, uint8_t xmm) {
     // sub rsp, 16
     byte_writer_uint8(writer, 0x48); // rex.w prefix
@@ -263,6 +289,10 @@ static void write_mov_mem_to_reg(ByteWriter *writer, uint8_t src_reg, uint8_t ds
 }
 
 static void write_mov_reg_to_reg(ByteWriter *writer, uint8_t src_reg, uint8_t dest_reg) {
+
+    if (src_reg == dest_reg)
+        return;
+
     byte_writer_uint8(writer, 0x89); // opcode for mov instruction
     unsigned char modrm = 0;
     modrm |= (3 << 6); // register-to-register encoding
@@ -271,13 +301,36 @@ static void write_mov_reg_to_reg(ByteWriter *writer, uint8_t src_reg, uint8_t de
     byte_writer_uint8(writer, modrm); // ModR/M byte specifying registers
 }
 
+static void write_mov_xmm_to_xmm(ByteWriter *writer, uint8_t src_xmm, uint8_t dest_xmm) {
 
-static void write_mov_reg_to_xmm(ByteWriter *writer, uint8_t src_reg, uint8_t dest_reg) {
+    if (src_xmm == dest_xmm)
+        return;
+
+    if (src_xmm >= REGISTER_XMM8 || dest_xmm >= REGISTER_XMM8) {
+        // REX prefix: 0x40 | ((dest_xmm & 8) >> 1) | ((src_xmm & 8) >> 3)
+        byte_writer_uint8(writer, 0x40 | ((dest_xmm & 8) >> 1) | ((src_xmm & 8) >> 3));
+
+        // MOVAPS instruction opcode
+        byte_writer_uint8(writer, 0x0F);
+        byte_writer_uint8(writer, 0x28);
+
+        // ModR/M byte: 0xC0 | ((dest_xmm & 7) << 3) | (src_xmm & 7)
+        byte_writer_uint8(writer, 0xC0 | ((dest_xmm & 7) << 3) | (src_xmm & 7));
+    } else {
+        // MOVAPS instruction opcode
+        byte_writer_uint8(writer, 0x0F);
+        byte_writer_uint8(writer, 0X28);
+        byte_writer_uint8(writer, 0xC0 | (dest_xmm << 3) | src_xmm);
+    }
+}
+
+
+static void write_mov_reg_to_xmm(ByteWriter *writer, uint8_t src_reg, uint8_t dest_xmm) {
     byte_writer_uint8(writer, 0x66); // prefix for the xmm
     byte_writer_uint8(writer, 0x48); // REX
     byte_writer_uint8(writer, 0X0F); // opcode for extension
     byte_writer_uint8(writer, 0x6E); // opcode for movq
-    byte_writer_uint8(writer, (0xC0 | (dest_reg & 0x7) << 3 | (src_reg & 0x7)));
+    byte_writer_uint8(writer, (0xC0 | (dest_xmm & 0x7) << 3 | (src_reg & 0x7)));
 }
 
 static void write_move_xmm_to_reg(ByteWriter *writer, uint8_t xmm, uint8_t reg) {
@@ -286,6 +339,11 @@ static void write_move_xmm_to_reg(ByteWriter *writer, uint8_t xmm, uint8_t reg) 
     byte_writer_uint8(writer, 0x0F); // opcode extension
     byte_writer_uint8(writer, 0x7E);  // opcode for "movq" instruction
     byte_writer_uint8(writer, (0xC0 | (xmm & 0x7) << 3 | (reg & 0x7)));
+}
+
+static size_t write_mov_xmm_f64(ByteWriter *writer, uint8_t xmm, int64_t value) {
+    write_mov_reg_int64(writer, REGISTER_RAX, value);
+    write_mov_reg_to_xmm(writer, REGISTER_RAX, xmm);
 }
 
 static void write_add_reg_to_reg(ByteWriter *writer, uint8_t left_reg, uint8_t right_reg) {
@@ -325,20 +383,16 @@ static void write_mod_reg_to_reg(ByteWriter *writer, uint8_t left_reg, uint8_t r
 }
 
 
-static void write_add_reg_to_reg_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t xmm2) {
-    const uint8_t mod = 3;
-    xmm1 &= 0x0F;
-    xmm2 &= 0x0F;
-    uint8_t modrm = (mod << 6) | (xmm1 << 3) | xmm2;
+static void write_add_xmm_to_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t xmm2) {
+    uint8_t rex = 0x40;
+    if (xmm1 >= 8) rex |= 0x04;
+    if (xmm2 >= 8) rex |= 0x01;
 
-    if (xmm1 >= 8 || xmm2 >= 8) { //if beyond XMM8, we need the REX prefix
-        uint8_t rex = 0x40 | ((xmm1 & 0x08) >> 1) | (xmm2 & 0x08);
-        byte_writer_uint8(writer, rex);
-    }
-
+    byte_writer_uint8(writer, rex);
+    byte_writer_uint8(writer, 0x66);
     byte_writer_uint8(writer, 0x0F);
     byte_writer_uint8(writer, 0x58);
-    byte_writer_uint8(writer, modrm);
+    byte_writer_uint8(writer, 0xC0 | ((xmm1 & 0x07) << 3) | (xmm2 & 0x07));
 }
 
 static void write_sub_reg_to_reg_xmm(ByteWriter *writer, uint8_t xmm1, uint8_t xmm2) {
@@ -474,14 +528,24 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
     switch (instr->opcode) {
 
         case COW_OPCODE_CONST_I32: {
-            uint8_t const_reg = allocate_register(allocator, instr->gen_value);
-            write_mov_reg_int64(writer, const_reg, instr->const_value);
+            if (cow_type_is_decimal(instr->gen_value->type)) {
+                uint8_t const_reg = allocate_xmm(allocator, instr->gen_value);
+                write_mov_xmm_f64(writer, const_reg, instr->const_value);
+            } else {
+                uint8_t const_reg = allocate_register(allocator, instr->gen_value);
+                write_mov_reg_int64(writer, const_reg, instr->const_value);
+            }
         }
             break;
 
         case COW_OPCODE_CONST_I64: {
-            uint8_t const_reg = allocate_register(allocator, instr->gen_value);
-            write_mov_reg_int64(writer, const_reg, instr->const_value);
+            if (cow_type_is_decimal(instr->gen_value->type)) {
+                uint8_t const_reg = allocate_xmm(allocator, instr->gen_value);
+                write_mov_xmm_f64(writer, const_reg, instr->const_value);
+            } else {
+                uint8_t const_reg = allocate_register(allocator, instr->gen_value);
+                write_mov_reg_int64(writer, const_reg, instr->const_value);
+            }
         }
             break;
 
@@ -493,17 +557,11 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
 
         case COW_OPCODE_ADD: {
             if (cow_type_is_decimal(instr->op.left_value->type)) {
-                uint8_t add_result_reg = get_register_for_value(allocator, instr->op.left_value);
-                uint8_t right_reg = get_register_for_value(allocator, instr->op.right_value);
+                uint8_t add_result_reg = get_xmm_for_value(allocator, instr->op.left_value);
+                uint8_t right_reg = get_xmm_for_value(allocator, instr->op.right_value);
+                allocator_switch_xmm(allocator, instr->op.left_value, instr->gen_value);
 
-                write_mov_reg_to_xmm(writer, add_result_reg, REGISTER_XMM0);
-                write_mov_reg_to_xmm(writer, right_reg, REGISTER_XMM1);
-
-                write_add_reg_to_reg_xmm(writer, REGISTER_XMM0, REGISTER_XMM1);
-                write_move_xmm_to_reg(writer, REGISTER_XMM0, add_result_reg);
-
-                allocator_switch(allocator, instr->op.left_value, instr->gen_value);
-
+                write_add_xmm_to_xmm(writer, add_result_reg, right_reg);
             } else {
                 uint8_t add_result_reg = get_register_for_value(allocator, instr->op.left_value);
                 uint8_t right_reg = get_register_for_value(allocator, instr->op.right_value);
@@ -529,9 +587,15 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
         case COW_OPCODE_CALL_PTR: {
             write_call_indirect(writer, get_register_for_value(allocator, instr->call_ptr.func_ptr_value));
             if (instr->call_ptr.call_return_type.data_type != COW_DATA_TYPE_VOID) {
-                uint8_t call_result_reg = allocate_register(allocator, instr->gen_value);
-                //move the result into the right register
-                write_mov_reg_to_reg(writer, REGISTER_RAX, call_result_reg);
+                if (cow_type_is_decimal(instr->call_ptr.call_return_type)) {
+                    uint8_t call_result_reg = allocate_xmm(allocator, instr->gen_value);
+                    //move the result into the right float register
+                    write_mov_xmm_to_xmm(writer, REGISTER_XMM0, call_result_reg);
+                } else {
+                    uint8_t call_result_reg = allocate_register(allocator, instr->gen_value);
+                    //move the result into the right register
+                    write_mov_reg_to_reg(writer, REGISTER_RAX, call_result_reg);
+                }
             }
         }
             break;
@@ -544,20 +608,27 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
             array_add(&func->jit_func.direct_call_offset, offset);
 
             if (instr->call_ptr.call_return_type.data_type != COW_DATA_TYPE_VOID) {
-                uint8_t call_result_reg = allocate_register(allocator, instr->gen_value);
-                //move the result into the right register
-                write_mov_reg_to_reg(writer, REGISTER_RAX, call_result_reg);
+                if (cow_type_is_decimal(instr->call_ptr.call_return_type)) {
+                    uint8_t call_result_reg = allocate_xmm(allocator, instr->gen_value);
+                    //move the result into the right float register
+                    write_mov_reg_to_mem(writer, REGISTER_XMM0, call_result_reg);
+                } else {
+                    uint8_t call_result_reg = allocate_register(allocator, instr->gen_value);
+                    //move the result into the right register
+                    write_mov_reg_to_reg(writer, REGISTER_RAX, call_result_reg);
+                }
             }
         }
             break;
 
         case COW_OPCODE_RET:
             if (func->return_type.data_type == COW_DATA_TYPE_F64 || func->return_type.data_type == COW_DATA_TYPE_F32) {
-                uint8_t return_register = get_register_for_value(allocator, instr->return_value);
-                write_mov_reg_to_xmm(writer, return_register, REGISTER_XMM0);
+                uint8_t return_register = get_xmm_for_value(allocator, instr->return_value);
+                write_mov_xmm_to_xmm(writer, return_register, REGISTER_XMM0);
                 write_ret(writer);
             } else {
-                write_mov_reg_to_reg(writer, get_register_for_value(allocator, instr->return_value), REGISTER_RAX);
+                uint8_t return_register = get_register_for_value(allocator, instr->return_value);
+                write_mov_reg_to_reg(writer, return_register, REGISTER_RAX);
                 write_ret(writer);
             }
             break;
