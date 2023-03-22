@@ -6,7 +6,7 @@
 typedef struct {
     CowBlock block;
     size_t offset;
-    int instr_size;
+    size_t instr_size;
 } BlockToReplace;
 
 typedef struct {
@@ -96,6 +96,16 @@ bool assign_register_for_value(X86RegisterAllocator *allocator, uint8_t reg, Cow
     return false;
 }
 
+bool is_register_assigned(X86RegisterAllocator *allocator, uint8_t reg) {
+    for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
+        if (allocator->registers[i].reg_value == reg && allocator->registers[i].value != NULL) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool allocator_switch(X86RegisterAllocator *allocator, CowValue old_value, CowValue new_value) {
     for (size_t i = 0; i < X86_REGISTERS_COUNT; ++i) {
         if (allocator->registers[i].value == old_value) {
@@ -128,10 +138,67 @@ uint8_t get_register_for_value(X86RegisterAllocator *allocator, CowValue value) 
     return 0;
 }
 
-static void write_mov_reg_int64(ByteWriter *writer, uint8_t dest_reg, int64_t value) {
+static void write_push_xmm(ByteWriter *writer, uint8_t xmm) {
+    // sub rsp, 16
+    byte_writer_uint8(writer, 0x48); // rex.w prefix
+    byte_writer_uint8(writer, 0x83); // opcode for 'sub'
+    byte_writer_uint8(writer, 0xEC); // ModR/M byte for 'sub' with rsp
+    byte_writer_uint8(writer, 0x10); // Immediate 16
+
+    // movaps [rsp], xmm
+    byte_writer_uint8(writer, 0x48);
+    byte_writer_uint8(writer, 0x0F);
+    byte_writer_uint8(writer, 0x29);
+    byte_writer_uint8(writer, 0x04 | (xmm << 3));
+}
+
+static void write_pop_xmm(ByteWriter *writer, uint8_t xmm) {
+    // movaps xmmN, [rsp]
+    byte_writer_uint8(writer, 0x48);  // REX.W prefix (clear REX.R, set REX.W)
+    byte_writer_uint8(writer, 0x0F); // Opcode escape byte for 'movaps'
+    byte_writer_uint8(writer, 0x28); // Opcode for 'movaps'
+    byte_writer_uint8(writer, 0x04 | (xmm << 3)); // ModR/M byte for 'movaps' with xmmN and [rsp]
+
+    // movaps [rsp], xmm
+    byte_writer_uint8(writer, 0x48); // REX.W prefix
+    byte_writer_uint8(writer, 0x83); // Opcode for 'add'
+    byte_writer_uint8(writer, 0xC4); // ModR/M byte for 'add' with rsp
+    byte_writer_uint8(writer, 0x10); // Immediate 16
+}
+
+static void write_push_reg(ByteWriter *writer, uint8_t reg) {
+
+    if (reg == REGISTER_RSP) {
+        return;
+    }
+
+    if (reg <= REGISTER_RDI) {
+        byte_writer_uint8(writer, 0x50 + reg);
+    } else { //R8 and up
+        byte_writer_uint8(writer, 0x41); // rex prefix for extended registers
+        byte_writer_uint8(writer, 0x50 + (reg - REGISTER_R8));
+    }
+}
+
+static void write_pop_reg(ByteWriter *writer, uint8_t reg) {
+
+    if (reg == REGISTER_RSP) {
+        return;
+    }
+
+    if (reg <= REGISTER_RDI) {
+        byte_writer_uint8(writer, 0x58 + reg);
+    } else {
+        byte_writer_uint8(writer, 0x41); // rex prefix for extended registers
+        byte_writer_uint8(writer, 0x58 + (reg - REGISTER_R8));
+    }
+
+}
+
+static size_t write_mov_reg_int64(ByteWriter *writer, uint8_t dest_reg, int64_t value) {
     byte_writer_uint8(writer, 0x48); // REX prefix
     byte_writer_uint8(writer, 0xB8 | (dest_reg & 0x7)); // src_register
-    byte_writer_int64(writer, value); // const
+    return byte_writer_int64(writer, value); // const
 }
 
 //store
@@ -300,14 +367,57 @@ static size_t write_cond_jmp(ByteWriter *writer, uint8_t reg) {
     return result;
 }
 
-static void write_call(ByteWriter *writer, uint8_t reg) {
+static void write_call_indirect(ByteWriter *writer, uint8_t reg) {
     byte_writer_uint8(writer, 0x48); // REX prefix for 64-bit mode
     byte_writer_uint8(writer, 0xFF); // Opcode for the CALL instruction (indirect)
     byte_writer_uint8(writer, 0xD0 | (reg & 0x07)); // ModR/M byte with register as operand
 }
 
+static size_t write_call_direct(ByteWriter *writer) {
+    size_t offset = write_mov_reg_int64(writer, REGISTER_RAX, 0);
+    write_call_indirect(writer, REGISTER_RAX);
+    return offset;
+}
+
 static void write_ret(ByteWriter *writer) {
     byte_writer_uint8(writer, 0xC3);
+}
+
+static void
+setup_arguments_into_registers(X86RegisterAllocator *allocator, ByteWriter *writer, CowFunc func, CowValue *values,
+                               size_t args_count) {
+    uint8_t int_registers[] = {REGISTER_RCX, REGISTER_RDX, REGISTER_R8, REGISTER_R9};
+    uint8_t float_registers[] = {REGISTER_XMM0, REGISTER_XMM1, REGISTER_XMM2, REGISTER_XMM3};
+
+    int int_count = 0;
+    float float_count = 0;
+
+    for (size_t i = 0; i < args_count; ++i) {
+        if (cow_type_is_decimal(values[i]->type)) {
+
+            ++float_count;
+        } else {
+            uint8_t call_conv_reg = int_registers[int_count];
+            if (is_register_assigned(allocator, call_conv_reg)) {
+                write_push_reg(writer, call_conv_reg);
+            }
+
+            write_mov_reg_to_reg(writer, get_register_for_value(allocator, values[i]), call_conv_reg);
+
+            ++int_count;
+        }
+    }
+
+    for (int i = 0; i < int_count; ++i) {
+        uint8_t call_conv_reg = int_registers[int_count];
+        write_pop_reg(writer, call_conv_reg);
+    }
+
+    for (int i = 0; i < int_count; ++i) {
+        uint8_t call_conv_reg = int_registers[int_count];
+        //write_pop_xmm(writer, call_conv_reg);
+    }
+
 }
 
 
@@ -370,7 +480,7 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
             break;
 
         case COW_OPCODE_CALL_PTR: {
-            write_call(writer, get_register_for_value(allocator, instr->call_ptr.func_ptr_value));
+            write_call_indirect(writer, get_register_for_value(allocator, instr->call_ptr.func_ptr_value));
             if (instr->call_ptr.call_return_type.data_type != COW_DATA_TYPE_VOID) {
                 uint8_t call_result_reg = allocate_register(allocator, instr->gen_value);
                 //move the result into the right register
@@ -380,7 +490,17 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
             break;
 
         case COW_OPCODE_CALL_FUNC: {
+            size_t call_offset = write_call_direct(writer);
+            _CowJitCallOffset *offset = cow_alloc(sizeof(_CowJitCallOffset));
+            offset->offset = call_offset;
+            offset->func = instr->call_func.func_value;
+            array_add(&func->jit_func.direct_call_offset, offset);
 
+            if (instr->call_ptr.call_return_type.data_type != COW_DATA_TYPE_VOID) {
+                uint8_t call_result_reg = allocate_register(allocator, instr->gen_value);
+                //move the result into the right register
+                write_mov_reg_to_reg(writer, REGISTER_RAX, call_result_reg);
+            }
         }
             break;
 

@@ -9,6 +9,7 @@
 typedef struct {
     ByteWriter code;
     void *generated_func;
+    Array direct_call_offset;
 } _CowJitFunc;
 
 
@@ -21,7 +22,13 @@ typedef struct {
     _CowJitFunc jit_func;
 } _CowFunc;
 
+
 typedef _CowFunc *CowFunc;
+
+typedef struct {
+    size_t offset;
+    CowFunc func;
+} _CowJitCallOffset;
 
 void cow_func_free(CowFunc func);
 

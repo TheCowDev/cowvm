@@ -21,7 +21,7 @@ void cow_module_free(CowModule module) {
 void cow_module_jit(CowModule module) {
     cow_x86_64_jit(module);
 
-    // Allocate executable memory
+    // allocate executable memory
     for (size_t i = 0; i < module->funcs.size; ++i) {
         CowFunc func = module->funcs.data[i];
         char *code = func->jit_func.code.data;
@@ -29,6 +29,16 @@ void cow_module_jit(CowModule module) {
         char *exec = cow_alloc_exec_mem(code_size);
         memcpy(exec, code, code_size);
         func->jit_func.generated_func = exec;
+    }
+
+    // replace the direct function call offset
+    for (size_t i = 0; i < module->funcs.size; ++i) {
+        CowFunc func = (CowFunc) module->funcs.data[i];
+        for (size_t j = 0; j < func->jit_func.direct_call_offset.size; ++j) {
+            _CowJitCallOffset *offset = func->jit_func.direct_call_offset.data[j];
+            void **addr = (void **) &((char *) func->jit_func.generated_func)[offset->offset];
+            *addr = offset->func->jit_func.generated_func;
+        }
     }
 }
 
