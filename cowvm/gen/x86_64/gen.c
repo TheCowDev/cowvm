@@ -58,6 +58,10 @@ typedef struct {
 #define REGISTER_XMM14 14
 #define REGISTER_XMM15 15
 
+//Calling convention dependant
+uint8_t int_registers_for_call[] = {REGISTER_RCX, REGISTER_RDX, REGISTER_R8, REGISTER_R9};
+uint8_t float_registers_for_call[] = {REGISTER_XMM0, REGISTER_XMM1, REGISTER_XMM2, REGISTER_XMM3};
+
 void allocate_init(X86RegisterAllocator *allocator) {
     allocator->registers[0] = (X86Register) {REGISTER_RCX, NULL};
     allocator->registers[1] = (X86Register) {REGISTER_RDX, NULL};
@@ -225,6 +229,20 @@ static void write_push_xmm(ByteWriter *writer, uint8_t xmm) {
     byte_writer_uint8(writer, 0x04 | (xmm << 3));
 }
 
+static void push_shadow(ByteWriter *writer) {
+    byte_writer_uint8(writer, 0x48);
+    byte_writer_uint8(writer, 0x83);
+    byte_writer_uint8(writer, 0xec);
+    byte_writer_uint8(writer, 0x20);
+}
+
+static void pop_shadow(ByteWriter *writer) {
+    byte_writer_uint8(writer, 0x48);
+    byte_writer_uint8(writer, 0x83);
+    byte_writer_uint8(writer, 0xc4);
+    byte_writer_uint8(writer, 0x20);
+}
+
 static void write_pop_xmm(ByteWriter *writer, uint8_t xmm) {
     // movaps xmmN, [rsp]
     byte_writer_uint8(writer, 0x48);  // REX.W prefix (clear REX.R, set REX.W)
@@ -245,7 +263,7 @@ static void write_push_reg(ByteWriter *writer, uint8_t reg) {
         return;
     }
 
-    if (reg <= REGISTER_RDI) {
+    if (reg < REGISTER_R8) {
         byte_writer_uint8(writer, 0x50 + reg);
     } else { //R8 and up
         byte_writer_uint8(writer, 0x41); // rex prefix for extended registers
@@ -293,11 +311,16 @@ static void write_mov_reg_to_reg(ByteWriter *writer, uint8_t src_reg, uint8_t de
     if (src_reg == dest_reg)
         return;
 
+    unsigned char rex = 0x40; // REX prefix base value
+    rex |= (1 << 3); // REX.W bit for 64-bit operation
+    rex |= ((src_reg & 8) >> 1) | ((dest_reg & 8) >> 3); // REX.R and REX.B bits for register extension
+    byte_writer_uint8(writer, rex); // Write REX prefix
+
     byte_writer_uint8(writer, 0x89); // opcode for mov instruction
     unsigned char modrm = 0;
     modrm |= (3 << 6); // register-to-register encoding
-    modrm |= (src_reg << 3); // 3 bits for destination register
-    modrm |= dest_reg; // 3 bits for source register
+    modrm |= ((src_reg & 7) << 3); // 3 bits for destination register
+    modrm |= (dest_reg & 7); // 3 bits for source register
     byte_writer_uint8(writer, modrm); // ModR/M byte specifying registers
 }
 
@@ -484,41 +507,52 @@ static void write_ret(ByteWriter *writer) {
     byte_writer_uint8(writer, 0xC3);
 }
 
+typedef struct {
+    uint8_t reg;
+    bool is_xmm;
+} ArgsRegisterToPop;
+
 static void
 setup_arguments_into_registers(X86RegisterAllocator *allocator, ByteWriter *writer, CowFunc func, CowValue *values,
-                               size_t args_count) {
-    uint8_t int_registers[] = {REGISTER_RCX, REGISTER_RDX, REGISTER_R8, REGISTER_R9};
-    uint8_t float_registers[] = {REGISTER_XMM0, REGISTER_XMM1, REGISTER_XMM2, REGISTER_XMM3};
+                               size_t args_count, int *pop_counts, ArgsRegisterToPop *args_to_pop) {
+    *pop_counts = 0;
 
     int int_count = 0;
     float float_count = 0;
 
     for (size_t i = 0; i < args_count; ++i) {
+        uint8_t call_conv_reg = float_registers_for_call[int_count];
         if (cow_type_is_decimal(values[i]->type)) {
+            if (is_register_assigned_xmm(allocator, call_conv_reg)) {
+                write_push_xmm(writer, call_conv_reg);
+                args_to_pop[*pop_counts].is_xmm = true;
+                args_to_pop[*pop_counts].reg = call_conv_reg;
+                ++(*pop_counts);
+            }
 
             ++float_count;
         } else {
-            uint8_t call_conv_reg = int_registers[int_count];
+            uint8_t call_conv_reg = int_registers_for_call[int_count];
             if (is_register_assigned(allocator, call_conv_reg)) {
                 write_push_reg(writer, call_conv_reg);
+                args_to_pop[*pop_counts].is_xmm = false;
+                args_to_pop[*pop_counts].reg = call_conv_reg;
+                ++(*pop_counts);
             }
-
-            write_mov_reg_to_reg(writer, get_register_for_value(allocator, values[i]), call_conv_reg);
 
             ++int_count;
         }
     }
+}
 
-    for (int i = 0; i < int_count; ++i) {
-        uint8_t call_conv_reg = int_registers[int_count];
-        write_pop_reg(writer, call_conv_reg);
+void clear_argument(ByteWriter *writer, int pop_counts, ArgsRegisterToPop *args_to_pop) {
+    for (int i = 0; i < pop_counts; ++i) {
+        if (args_to_pop[i].is_xmm) {
+            write_pop_xmm(writer, args_to_pop[i].reg);
+        } else {
+            write_pop_reg(writer, args_to_pop[i].reg);
+        }
     }
-
-    for (int i = 0; i < int_count; ++i) {
-        uint8_t call_conv_reg = int_registers[int_count];
-        //write_pop_xmm(writer, call_conv_reg);
-    }
-
 }
 
 
@@ -585,7 +619,34 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
             break;
 
         case COW_OPCODE_CALL_PTR: {
+            int args_push_count = 0;
+            ArgsRegisterToPop args_pop[50];
+
+            setup_arguments_into_registers(allocator, writer, func, instr->call_ptr.args, instr->call_ptr.args_count,
+                                           &args_push_count,
+                                           (ArgsRegisterToPop *) &args_pop);
+
+            int int_arg =0;
+            int float_arg =0;
+            for (size_t i = 0; i < instr->call_func.args_count; ++i) {
+                if (cow_type_is_decimal(instr->call_func.args[i]->type)) {
+                    write_mov_xmm_to_xmm(writer, get_xmm_for_value(allocator, instr->call_ptr.args[i]),
+                                         float_registers_for_call[float_arg]);
+                    ++float_arg;
+                } else {
+                    printf("%d %d\n",get_register_for_value(allocator, instr->call_ptr.args[i]), int_registers_for_call[int_arg]);
+                    write_mov_reg_to_reg(writer, get_register_for_value(allocator, instr->call_ptr.args[i]),
+                                         int_registers_for_call[int_arg]);
+                    ++int_arg;
+                }
+            }
+
+            push_shadow(writer);
+
             write_call_indirect(writer, get_register_for_value(allocator, instr->call_ptr.func_ptr_value));
+
+            pop_shadow(writer);
+
             if (instr->call_ptr.call_return_type.data_type != COW_DATA_TYPE_VOID) {
                 if (cow_type_is_decimal(instr->call_ptr.call_return_type)) {
                     uint8_t call_result_reg = allocate_xmm(allocator, instr->gen_value);
@@ -597,6 +658,8 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
                     write_mov_reg_to_reg(writer, REGISTER_RAX, call_result_reg);
                 }
             }
+
+            clear_argument(writer, args_push_count, (ArgsRegisterToPop *) &args_pop);
         }
             break;
 
