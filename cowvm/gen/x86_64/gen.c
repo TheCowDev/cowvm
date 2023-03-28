@@ -626,15 +626,16 @@ void jit_instr(CowFunc func, CowInstr *instr, X86RegisterAllocator *allocator) {
                                            &args_push_count,
                                            (ArgsRegisterToPop *) &args_pop);
 
-            int int_arg =0;
-            int float_arg =0;
+            int int_arg = 0;
+            int float_arg = 0;
             for (size_t i = 0; i < instr->call_func.args_count; ++i) {
                 if (cow_type_is_decimal(instr->call_func.args[i]->type)) {
                     write_mov_xmm_to_xmm(writer, get_xmm_for_value(allocator, instr->call_ptr.args[i]),
                                          float_registers_for_call[float_arg]);
                     ++float_arg;
                 } else {
-                    printf("%d %d\n",get_register_for_value(allocator, instr->call_ptr.args[i]), int_registers_for_call[int_arg]);
+                    printf("%d %d\n", get_register_for_value(allocator, instr->call_ptr.args[i]),
+                           int_registers_for_call[int_arg]);
                     write_mov_reg_to_reg(writer, get_register_for_value(allocator, instr->call_ptr.args[i]),
                                          int_registers_for_call[int_arg]);
                     ++int_arg;
